@@ -1,96 +1,57 @@
-# Rapport de Vulnérabilité : Recherche de Fichiers et Chiffrement César
+Rainfall - Flag 0
 
-## Description
+⚡ Objectif
 
-Cette faille repose sur la présence d’un fichier appartenant à l’utilisateur flag00, accessible en lecture. En listant les fichiers possédés par cet utilisateur, on découvre un fichier situé dans /usr/sbin/john. En affichant son contenu avec la commande cat, on obtient un message chiffré en César. Une fois déchiffré, ce message donne accès au mot de passe de l’utilisateur flag00.
+Comprendre et exploiter le niveau 0 du challenge Rainfall pour récupérer le mot de passe du niveau suivant (level1).
 
-## Comment Exploiter la Faille
+📝 Analyse initiale
 
-### Étape 1 : Recherche des fichiers appartenant à `flag00`
+En démarrant le binaire level0 dans GDB et en listant le début de la fonction main, on observe ceci :
 
-```bash
-find / -user flag00 2>/dev/null
-```
+0x08048ed4 <+20>: call 0x8049710 <atoi>
+0x08048ed9 <+25>: cmp $0x1a7,%eax
 
-* `find /` : cherche à partir de la racine du système.
-* `-user flag00` : filtre les fichiers appartenant à l'utilisateur `flag00`.
-* `2>/dev/null` : redirige les erreurs (comme les "Permission denied") vers null pour ne garder que les résultats accessibles.
+atoi convertit le premier argument passé en ligne de commande en entier (ex: ./level0 123) et le met dans %eax.
 
-**Résultat :**
+Ensuite, on compare %eax à 0x1a7.
 
-```
-/usr/sbin/john
-/rofs/usr/sbin/john
-```
+En décimal, 0x1a7 = 423.
 
-### Étape 2 : Analyse du fichier trouvé
+Cela signifie que le programme vérifie si l'argument fourni est égal à 423. Si c'est le cas, l'exécution continue, sinon on exécute un fwrite d'un message d'erreur.
 
-On utilise `cat` pour afficher le contenu du fichier :
+🔢 Exploitation
 
-```bash
-cat /usr/sbin/john
-```
+On lance donc simplement :
 
-**Sortie :**
+./level0 423
 
-```
-cdiiddwpgswtgt
-```
+Cela nous ouvre un shell.
 
-### Étape 3 : Déchiffrement
+🤔 Vérification des droits
 
-Ce texte est chiffré avec un **chiffrement César**.
-Après décryptage, on obtient :
+Dans le shell :
 
-```
-nottoohardhere
-```
+whoami
+# user_level1
 
-### Étape 4 : Connexion en tant que `flag00`
+Nous avons les droits du niveau suivant.
 
-```bash
-su flag00
-```
+🔐 Récupération du flag
 
-**Mot de passe :**
+cat /home/user/level1/.pass
+# 1fe8a524fa4bec01ca4ea2a869af2a02260d4a7d5fe7e7c24d8617e6dca12d3a
 
-```
-nottoohardhere
-```
+Puis :
 
-### Étape 5 : Récupération du flag
+su level1
+# Entrer le flag comme mot de passe
 
-```bash
-getflag
-```
+📅 Résumé
 
-**Flag obtenu :**
+Le binaire vérifie un argument = 423 (via atoi + cmp).
 
-```
-x24ti5gi3x0ol2eh4esiuxias
-```
+Si OK, on entre dans un shell avec droits level1.
 
-### Étape 6 : Passage au niveau suivant
+Le flag est accessible en lisant /home/user/level1/.pass.
 
-```bash
-su level01
-```
-
-**Mot de passe :**
-
-```
-x24ti5gi3x0ol2eh4esiuxias
-```
-
-## Comment Résoudre la Faille
-
-Pour corriger cette vulnérabilité :
-
-* **Ne pas stocker de données sensibles en clair ou en chiffré simple** : Même un chiffrement comme César est insuffisant.
-* **Restreindre les accès** : Limiter les droits en lecture sur les fichiers sensibles.
-
-## Conclusion
-
-Cette vulnérabilité montre comment une mauvaise configuration système et un chiffrement trop faible peuvent permettre à un attaquant de prendre le contrôle d’un compte et d’accéder à des ressources sensibles.
-
----
+Le niveau ne contient aucune faille à exploiter, juste de l'observation d'assembleur.
